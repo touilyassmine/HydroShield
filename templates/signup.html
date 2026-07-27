@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Create your HydroShield account{% endblock %}
+{% block content %}
+<div class="auth-shell">
+    <div class="auth-top">
+        {% include "partials/mark.html" %}
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('welcome') }}" style="margin-left:auto;">Back</a>
+    </div>
+
+    <main class="auth-main">
+        <div class="auth-card">
+            <p class="eyebrow">Step 1 of 2</p>
+            <h1>Create your account</h1>
+            <p class="sub">We'll use this to reach you if a field needs attention.</p>
+
+            {% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+
+            <form method="post" action="{{ url_for('signup') }}">
+                <div class="field-row">
+                    <label for="name">Full name</label>
+                    <input id="name" name="name" type="text" placeholder="e.g. Mohamed Ben Ali" required>
+                </div>
+                <div class="field-row">
+                    <label for="farm_name">Farm name <span style="text-transform:none;color:var(--muted-2);">(optional)</span></label>
+                    <input id="farm_name" name="farm_name" type="text" placeholder="e.g. Sousse Family Farm">
+                </div>
+                <div class="field-grid-2">
+                    <div class="field-row">
+                        <label for="email">Email address</label>
+                        <input id="email" name="email" type="email" placeholder="you@example.com" required>
+                    </div>
+                    <div class="field-row">
+                        <label for="phone">Phone number</label>
+                        <input id="phone" name="phone" type="tel" placeholder="+216 ..." required>
+                    </div>
+                </div>
+                <div class="field-row">
+                    <label for="password">Password</label>
+                    <input id="password" name="password" type="password" placeholder="At least 8 characters" minlength="8" required>
+                </div>
+                <button class="btn btn-primary btn-block" type="submit">Create account &amp; add my fields</button>
+            </form>
+
+            <p class="auth-switch">Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
+        </div>
+    </main>
+</div>
+{% endblock %}

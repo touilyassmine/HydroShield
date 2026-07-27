@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Welcome to HydroShield{% endblock %}
+{% block content %}
+<div class="auth-shell">
+    <div class="auth-top">
+        {% include "partials/mark.html" %}
+    </div>
+
+    <main class="auth-main">
+        <div class="auth-card wide">
+            <p class="eyebrow">Smart irrigation for your fields</p>
+            <h1>Welcome to HydroShield.</h1>
+            <p class="sub">Watch every field's soil moisture, rain and temperature in one place, and let each field water itself — only as much as it actually needs.</p>
+
+            <div class="choice-grid">
+                <a class="choice-card" href="{{ url_for('login') }}">
+                    <svg class="ico" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="7" y="17" width="26" height="16" rx="3" stroke="#3FB6C9" stroke-width="2"/>
+                        <path d="M13 17v-4a7 7 0 0 1 14 0v4" stroke="#3FB6C9" stroke-width="2" stroke-linecap="round"/>
+                        <circle cx="20" cy="24.5" r="2" fill="#3FB6C9"/>
+                    </svg>
+                    <strong>I already have an account</strong>
+                    <span>Log in and check your fields</span>
+                </a>
+                <a class="choice-card" href="{{ url_for('signup') }}">
+                    <svg class="ico" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="17" cy="15" r="6" stroke="#8FBB4A" stroke-width="2"/>
+                        <path d="M6 34c1-6.5 5.9-10 11-10s10 3.5 11 10" stroke="#8FBB4A" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M31 13v8M27 17h8" stroke="#8FBB4A" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    <strong>I'm gonna make a new account</strong>
+                    <span>Set up your farm in a few steps</span>
+                </a>
+            </div>
+        </div>
+    </main>
+</div>
+{% endblock %}
