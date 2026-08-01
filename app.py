@@ -642,6 +642,7 @@ def ping():
 
 @app.route("/api/device/report", methods=["POST"])
 def device_report():
+    print("✅ /api/device/report was called!")
     data = request.get_json(force=True, silent=True)
     if not data:
         return jsonify({"error": "Invalid JSON"}), 400
