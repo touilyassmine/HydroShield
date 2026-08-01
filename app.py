@@ -29,6 +29,7 @@ app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
+# ---------- Soil Types ----------
 SOIL_TYPES = {
     "sandy":  "Sandy — drains fast, dries out quickly",
     "clay":   "Clay / muddy — holds water, drains slowly",
@@ -43,7 +44,10 @@ DEFAULT_MATURITY_DAYS = 75
 DEFAULT_MOISTURE_LOW = 30
 DEFAULT_MOISTURE_HIGH = 70
 
+# ---------- PLANT_DB (full) ----------
 PLANT_DB = {
+    "tunisian tomatoes": {"label": "Tunisian Tomatoes", "maturity_days": 80, "moisture_low": 30, "moisture_high": 70},
+    "roma tomatoes": {"label": "Roma Tomatoes", "maturity_days": 75, "moisture_low": 30, "moisture_high": 70},
     "tomato": {"label": "Tomatoes", "maturity_days": 75, "moisture_low": 30, "moisture_high": 70},
     "cherry tomato": {"label": "Cherry Tomatoes", "maturity_days": 65, "moisture_low": 30, "moisture_high": 65},
     "cucumber": {"label": "Cucumbers", "maturity_days": 55, "moisture_low": 40, "moisture_high": 75},
@@ -146,7 +150,6 @@ def call_vision_json(prompt_text, image_bytes, mime):
         raise Exception("GROQ_API_KEY not configured")
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     try:
-        print("📸 Calling Groq vision with model:", VISION_MODEL)
         completion = client.chat.completions.create(
             model=VISION_MODEL,
             response_format={"type": "json_object"},
@@ -158,17 +161,15 @@ def call_vision_json(prompt_text, image_bytes, mime):
                 ],
             }],
         )
-        print("✅ Vision success")
         return json.loads(completion.choices[0].message.content)
     except Exception as e:
         print("❌ Vision error:", e)
         raise
 
-# ---------- Firebase connection ----------
+# ---------- Firebase ----------
 FIREBASE_HOST = "https://test2708-2375b-default-rtdb.firebaseio.com"
 
 def fetch_firebase_data(device_id):
-    """Fetch latest sensor data from Firebase for a given device_id."""
     if not device_id:
         return None
     url = f"{FIREBASE_HOST}/devices/{device_id}.json"
@@ -275,17 +276,14 @@ with app.app_context():
 # ---------- Plant knowledge ----------
 def get_plant_knowledge(crop_label):
     key = crop_label.strip().lower()
-
     if key in PLANT_DB:
         p = PLANT_DB[key]
         return {"label": p["label"], "maturity_days": p["maturity_days"],
                 "moisture_low": p["moisture_low"], "moisture_high": p["moisture_high"], "source": "builtin"}
-
     cached = PlantKnowledge.query.filter_by(name=key).first()
     if cached:
         return {"label": cached.label, "maturity_days": cached.maturity_days,
                 "moisture_low": cached.moisture_low, "moisture_high": cached.moisture_high, "source": cached.source}
-
     if client is not None:
         try:
             completion = client.chat.completions.create(
@@ -334,7 +332,6 @@ def get_plant_knowledge(crop_label):
                     "moisture_low": moisture_low, "moisture_high": moisture_high, "source": "ai"}
         except Exception:
             pass
-
     return {"label": crop_label.strip(), "maturity_days": DEFAULT_MATURITY_DAYS,
             "moisture_low": DEFAULT_MOISTURE_LOW, "moisture_high": DEFAULT_MOISTURE_HIGH, "source": "default"}
 
@@ -349,18 +346,15 @@ def welcome():
 def signup():
     if request.method == "GET":
         return render_template("signup.html", error=None)
-
     name = request.form.get("name", "").strip()
     email = request.form.get("email", "").strip().lower()
     phone = request.form.get("phone", "").strip()
     farm_name = request.form.get("farm_name", "").strip()
     password = request.form.get("password", "")
-
     if not all([name, email, phone, password]):
         return render_template("signup.html", error="Please fill in every required field.")
     if User.query.filter_by(email=email).first():
         return render_template("signup.html", error="An account with that email already exists.")
-
     user = User(name=name, email=email, phone=phone, farm_name=farm_name or None,
                 password_hash=generate_password_hash(password))
     db.session.add(user)
@@ -372,13 +366,11 @@ def signup():
 def login():
     if request.method == "GET":
         return render_template("login.html", error=None)
-
     email = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
     user = User.query.filter_by(email=email).first()
     if not user or not check_password_hash(user.password_hash, password):
         return render_template("login.html", error="Incorrect email or password.")
-
     session["user_id"] = user.id
     return redirect(url_for("setup") if not user.fields else url_for("dashboard"))
 
@@ -400,7 +392,6 @@ def dashboard():
     if redirect_resp:
         return redirect_resp
     user = current_user()
-
     # Fetch data from Firebase for each field
     for field in user.fields:
         if field.device_id:
@@ -416,7 +407,6 @@ def dashboard():
                 if updated:
                     field.last_seen = datetime.now(timezone.utc)
                     db.session.commit()
-
     return render_template("index.html", user=user, fields=user.fields, soils=SOIL_TYPES)
 
 # ---------- API routes ----------
@@ -425,7 +415,6 @@ def suggest_plants():
     q = request.args.get("q", "").strip().lower()
     if len(q) < 2:
         return jsonify([])
-
     seen = set()
     results = []
     for key, p in PLANT_DB.items():
@@ -433,12 +422,10 @@ def suggest_plants():
             if p["label"] not in seen:
                 seen.add(p["label"])
                 results.append(p["label"])
-
     for row in PlantKnowledge.query.filter(PlantKnowledge.name.contains(q)).limit(10):
         if row.label not in seen:
             seen.add(row.label)
             results.append(row.label)
-
     return jsonify(results[:8])
 
 @app.route("/api/fields", methods=["POST"])
@@ -446,28 +433,22 @@ def create_field():
     user = current_user()
     if not user:
         return jsonify({"error": "Not logged in"}), 401
-
     data = request.form
     crop_label = data.get("crop_label", "").strip()
     if not crop_label:
         return jsonify({"error": "Tell us what plant is growing in this field."}), 400
-
     knowledge = get_plant_knowledge(crop_label)
     age_days = int(data["estimated_age_days"]) if data.get("estimated_age_days") else None
     moisture_low, moisture_high = growth_adjusted_thresholds(
         knowledge["moisture_low"], knowledge["moisture_high"], age_days, knowledge["maturity_days"]
     )
-
     soil_type = data.get("soil_type") or None
     if soil_type not in SOIL_TYPES:
         soil_type = None
-
     health_status = data.get("health_status") or None
     if health_status not in ("healthy", "possible_issue", "unclear"):
         health_status = None
-
     device_id = data.get("device_id", "").strip() or None
-
     field = Field(
         user_id=user.id,
         name=data.get("name", "").strip() or crop_label,
@@ -498,6 +479,20 @@ def get_field(field_id):
     field = Field.query.get_or_404(field_id)
     if not user or field.user_id != user.id:
         return jsonify({"error": "Not authorized"}), 403
+    # Fetch fresh data from Firebase
+    if field.device_id:
+        firebase_data = fetch_firebase_data(field.device_id)
+        if firebase_data:
+            updated = False
+            if 'soil_moisture' in firebase_data:
+                field.last_moisture = firebase_data['soil_moisture']
+                updated = True
+            if 'rain' in firebase_data:
+                field.last_rain = bool(firebase_data['rain'])
+                updated = True
+            if updated:
+                field.last_seen = datetime.now(timezone.utc)
+                db.session.commit()
     return jsonify(field.to_dict())
 
 @app.route("/api/fields/<int:field_id>", methods=["DELETE"])
@@ -516,7 +511,6 @@ def toggle_irrigation(field_id):
     field = Field.query.get_or_404(field_id)
     if not user or field.user_id != user.id:
         return jsonify({"error": "Not authorized"}), 403
-
     desired = request.json.get("on") if request.is_json else None
     field.irrigation_on = (not field.irrigation_on) if desired is None else bool(desired)
     field.auto_mode = False
@@ -539,7 +533,6 @@ def analyze_photo():
     photo = request.files.get("photo")
     if not photo:
         return jsonify({"error": "No photo received"}), 400
-
     if client is None:
         return jsonify({
             "estimated_age_days": None, "likely_origin": None,
@@ -547,7 +540,6 @@ def analyze_photo():
             "note": "AI unavailable (no GROQ_API_KEY set on the server). Enter details manually.",
             "source": "unavailable",
         }), 200
-
     prompt = (
         f"This is a photo of a {crop_label} plant on a farm or garden. Respond ONLY with a JSON object "
         "with exactly these keys: "
@@ -558,7 +550,6 @@ def analyze_photo():
         'pest damage, nutrient deficiency or stress if health_status is "possible_issue", otherwise an '
         'empty string).'
     )
-
     try:
         data = call_vision_json(prompt, photo.read(), photo.mimetype or "image/jpeg")
         age_days = data.get("age_days")
@@ -571,14 +562,12 @@ def analyze_photo():
             health_status = "unclear"
         health_note = (data.get("health_note") or "").strip() or None
     except Exception as exc:
-        print("Exception in analyze_photo:", exc)
         return jsonify({
             "estimated_age_days": None, "likely_origin": None,
             "health_status": None, "health_note": None,
             "note": f"AI analysis failed ({exc.__class__.__name__}). Enter details manually.",
             "source": "error",
         }), 200
-
     return jsonify({
         "estimated_age_days": age_days,
         "likely_origin": origin,
@@ -593,20 +582,17 @@ def estimate_soil():
     photo = request.files.get("photo")
     if not photo:
         return jsonify({"error": "No photo received"}), 400
-
     if client is None:
         return jsonify({
             "soil_type": None,
             "note": "AI unavailable (no GROQ_API_KEY set on the server). Pick the soil type manually.",
             "source": "unavailable",
         }), 200
-
     options = ", ".join(SOIL_TYPES.keys())
     prompt = (
         "This is a close-up photo of farm or garden soil. Respond ONLY with a JSON object with exactly "
         f'these keys: "soil_type" (exactly one of: {options}) and "confidence" (one of "high", "medium", "low").'
     )
-
     try:
         data = call_vision_json(prompt, photo.read(), photo.mimetype or "image/jpeg")
         soil_type = data.get("soil_type")
@@ -617,14 +603,12 @@ def estimate_soil():
             "note": f"AI analysis failed ({exc.__class__.__name__}). Pick the soil type manually.",
             "source": "error",
         }), 200
-
     if soil_type is None:
         return jsonify({
             "soil_type": None,
             "note": "Couldn't confidently classify that photo. Pick the soil type manually.",
             "source": "error",
         }), 200
-
     return jsonify({
         "soil_type": soil_type,
         "note": f"Looks like {SOIL_TYPES[soil_type].split(' — ')[0]} soil. Adjust it if that's off.",
@@ -636,12 +620,10 @@ def sensor_report(token):
     field = Field.query.filter_by(sensor_token=token).first()
     if not field:
         return jsonify({"error": "Unknown sensor token"}), 404
-
     data = request.get_json(force=True, silent=True) or {}
     field.last_moisture = data.get("moisture", field.last_moisture)
     field.last_rain = data.get("rain", field.last_rain)
     field.last_seen = datetime.now(timezone.utc)
-
     if field.auto_mode and field.last_moisture is not None:
         if field.last_rain:
             field.irrigation_on = False
@@ -649,7 +631,6 @@ def sensor_report(token):
             field.irrigation_on = True
         elif field.last_moisture >= field.moisture_high:
             field.irrigation_on = False
-
     db.session.commit()
     return jsonify({"irrigate": field.irrigation_on})
 
@@ -664,16 +645,13 @@ def sensor_command(token):
 def chat():
     user_message = request.json.get("message", "")
     image_data_url = request.json.get("image", None)
-
     if client is None:
         return jsonify({"reply": "The assistant isn't configured yet (missing GROQ_API_KEY on the server)."})
-
     if image_data_url:
         try:
             header, encoded = image_data_url.split(",", 1)
             mime_type = header.split(":")[1].split(";")[0]
             image_bytes = base64.b64decode(encoded)
-
             if user_message.strip():
                 prompt = (
                     f"The user sent a photo of a plant and asked: \"{user_message}\". "
@@ -689,16 +667,13 @@ def chat():
                     "give practical, actionable advice to fix them. "
                     "If it looks healthy, just say it looks good."
                 )
-
             data = call_vision_json(prompt, image_bytes, mime_type)
             reply = data.get("analysis") or data.get("response") or data.get("message")
             if not reply:
                 reply = json.dumps(data, indent=2)
             return jsonify({"reply": reply[:800]})
-
         except Exception as exc:
             return jsonify({"reply": f"Sorry, I couldn't analyze that photo. Error: {exc.__class__.__name__}. Please try again."})
-
     try:
         completion = client.chat.completions.create(
             model=TEXT_MODEL,
@@ -716,19 +691,16 @@ def chat():
         reply = completion.choices[0].message.content
     except Exception as exc:
         reply = f"Sorry, the assistant hit an error ({exc.__class__.__name__}). Please try again."
-
     return jsonify({"reply": reply})
 
-# ---------- Download Sketch (ESP8266 + Firebase only) ----------
+# ---------- Download Sketch (ESP8266 + Firebase) ----------
 @app.route("/api/fields/<int:field_id>/sketch")
 def download_sketch(field_id):
     user = current_user()
     field = Field.query.get_or_404(field_id)
     if not user or field.user_id != user.id:
         return jsonify({"error": "Not authorized"}), 403
-
     firebase_host = "https://test2708-2375b-default-rtdb.firebaseio.com"
-
     sketch_template = """
 /*
   HydroShield — ESP8266 field controller (Firebase only)
@@ -736,97 +708,63 @@ def download_sketch(field_id):
   Device ID will be generated automatically from chip ID.
   Firebase: {{ firebase_host }}
 */
-
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
-
-// ── Wi-Fi Credentials ──────────────────────────
 #define WIFI_SSID     "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
-
-// ── Firebase Endpoint ────────────────────────────
 const char* FIREBASE_HOST = "{{ firebase_host }}";
-
-// ── Hardware Pins ──────────────────────────────
 #define SOIL_PIN     A0
 #define RAIN_PIN     D5
 #define RELAY_PIN    D1
-
-// ── Soil Calibration ────────────────────────────
 const int SOIL_DRY_RAW = 780;
 const int SOIL_WET_RAW = 320;
-
-// ── Timing ──────────────────────────────────────
 #define REPORT_INTERVAL 10000
-
-// ── Automatic Unique Hardware ID ────────────────
 String getDeviceId() {
   return "ESP_" + String(ESP.getChipId(), HEX);
 }
-
-// ── Global Variables ─────────────────────────────
 float moisturePct   = 0.0;
 bool  rainDetected  = false;
 unsigned long lastReport = 0;
-
-// ── Sensor Reading Functions ─────────────────────
 float readSoilMoisture() {
   int raw = analogRead(SOIL_PIN);
   raw = constrain(raw, SOIL_WET_RAW, SOIL_DRY_RAW);
   float pct = 100.0 * (float)(SOIL_DRY_RAW - raw) / (float)(SOIL_DRY_RAW - SOIL_WET_RAW);
-  // Invert if your sensor gives opposite reading:
-  // pct = 100.0 - pct;
+  // Invert if needed: pct = 100.0 - pct;
   return round(pct * 10) / 10.0;
 }
-
 bool readRain() {
-  return (digitalRead(RAIN_PIN) == LOW);
+  return (digitalRead(RAIN_PIN) == LOW);  // change to HIGH if stuck on 1
 }
-
 void readSensors() {
   moisturePct = readSoilMoisture();
   rainDetected = readRain();
-
   Serial.printf("[%s] Moisture: %.1f%% | Rain: %s\\n",
                 getDeviceId().c_str(), moisturePct, rainDetected ? "YES" : "NO");
 }
-
-// ── Send Data to Firebase ─────────────────────────
 void sendToFirebase() {
   if (WiFi.status() != WL_CONNECTED) return;
-
   WiFiClientSecure secureClient;
   secureClient.setInsecure();
   secureClient.setTimeout(3000);
-
   HTTPClient http;
   String url = String(FIREBASE_HOST) + "/devices/" + getDeviceId() + ".json";
-
   String payload = "{";
   payload += "\"soil_moisture\":" + String(moisturePct, 1) + ",";
   payload += "\"rain\":" + String(rainDetected ? 1 : 0);
   payload += "}";
-
   http.begin(secureClient, url);
   http.addHeader("Content-Type", "application/json");
-
   int httpCode = http.PATCH(payload);
-
-  if (httpCode > 0) {
-    Serial.printf("[Firebase] Update OK (HTTP %d)\\n", httpCode);
-  } else {
-    Serial.printf("[Firebase] Error: %s\\n", http.errorToString(httpCode).c_str());
-  }
+  if (httpCode > 0) Serial.printf("[Firebase] Update OK (HTTP %d)\\n", httpCode);
+  else Serial.printf("[Firebase] Error: %s\\n", http.errorToString(httpCode).c_str());
   http.end();
 }
-
 void connectWiFi() {
   Serial.printf("Connecting to Wi-Fi \"%s\"...\\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
   int tries = 0;
   while (WiFi.status() != WL_CONNECTED && tries < 20) {
     delay(500);
@@ -837,22 +775,17 @@ void connectWiFi() {
   Serial.print("[Device ID] Your Board ID is: ");
   Serial.println(getDeviceId());
 }
-
 void setup() {
   Serial.begin(115200);
   Serial.println("\\n=== HydroShield (Firebase only) ===");
-
   pinMode(RAIN_PIN, INPUT);
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
-
   connectWiFi();
   readSensors();
 }
-
 void loop() {
   unsigned long now = millis();
-
   if (now - lastReport >= REPORT_INTERVAL) {
     lastReport = now;
     readSensors();
@@ -860,10 +793,8 @@ void loop() {
   }
 }
 """
-
     template = Template(sketch_template)
     rendered = template.render(field_name=field.name, firebase_host=firebase_host)
-
     response = make_response(rendered)
     response.headers["Content-Disposition"] = f"attachment; filename=hydroshield_{field.name.replace(' ', '_')}.ino"
     response.headers["Content-Type"] = "text/plain"
