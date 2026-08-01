@@ -636,6 +636,10 @@ def sensor_command(token):
     return jsonify({"irrigate": field.irrigation_on})
 
 # ---------- NEW: device report route ----------
+@app.route("/ping")
+def ping():
+    return "pong"
+
 @app.route("/api/device/report", methods=["POST"])
 def device_report():
     data = request.get_json(force=True, silent=True)
