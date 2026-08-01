@@ -19,7 +19,7 @@ if not GROQ_API_KEY:
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 TEXT_MODEL = "openai/gpt-oss-120b"
-VISION_MODEL = "qwen/qwen3.6-27b"   # as you said it works
+VISION_MODEL = "qwen/qwen3.6-27b"
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///hydroshield.db"
@@ -28,7 +28,7 @@ app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
-# ---------- Constants (same as before) ----------
+# ---------- Constants ----------
 SOIL_TYPES = {
     "sandy":  "Sandy — drains fast, dries out quickly",
     "clay":   "Clay / muddy — holds water, drains slowly",
@@ -226,6 +226,7 @@ class Field(db.Model):
     last_seen = db.Column(db.DateTime, nullable=True)
 
     sensor_token = db.Column(db.String(64), unique=True, default=lambda: secrets.token_hex(16))
+    device_id = db.Column(db.String(64), unique=True, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
@@ -255,6 +256,7 @@ class Field(db.Model):
             "last_rain": self.last_rain,
             "last_seen": self.last_seen.isoformat() if self.last_seen else None,
             "sensor_token": self.sensor_token,
+            "device_id": self.device_id,
         }
 
 # ---------- Create tables ----------
@@ -438,6 +440,8 @@ def create_field():
     if health_status not in ("healthy", "possible_issue", "unclear"):
         health_status = None
 
+    device_id = data.get("device_id", "").strip() or None
+
     field = Field(
         user_id=user.id,
         name=data.get("name", "").strip() or crop_label,
@@ -456,6 +460,7 @@ def create_field():
         soil_source=data.get("soil_source", "manual"),
         moisture_low=moisture_low,
         moisture_high=moisture_high,
+        device_id=device_id,
     )
     db.session.add(field)
     db.session.commit()
@@ -630,6 +635,48 @@ def sensor_command(token):
         return jsonify({"error": "Unknown sensor token"}), 404
     return jsonify({"irrigate": field.irrigation_on})
 
+# ---------- NEW: device report route ----------
+@app.route("/api/device/report", methods=["POST"])
+def device_report():
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    device_id = data.get("device_id")
+    if not device_id:
+        return jsonify({"error": "device_id missing"}), 400
+
+    field = Field.query.filter_by(device_id=device_id).first()
+    if not field:
+        return jsonify({"error": "Unknown device_id"}), 404
+
+    pins = data.get("pins", {})
+
+    # Extract soil moisture from A0 pin
+    moisture_pin = pins.get("A0")
+    if moisture_pin and "value" in moisture_pin:
+        field.last_moisture = moisture_pin["value"]
+
+    # Extract rain/water from D6 pin
+    rain_pin = pins.get("D6")
+    if rain_pin and "value" in rain_pin:
+        field.last_rain = bool(rain_pin["value"])
+
+    field.last_seen = datetime.now(timezone.utc)
+    db.session.commit()
+
+    # Auto irrigation decision
+    if field.auto_mode and field.last_moisture is not None:
+        if field.last_rain:
+            field.irrigation_on = False
+        elif field.last_moisture <= field.moisture_low:
+            field.irrigation_on = True
+        elif field.last_moisture >= field.moisture_high:
+            field.irrigation_on = False
+        db.session.commit()
+
+    return jsonify({"irrigate": field.irrigation_on})
+
 @app.route("/chat", methods=["POST"])
 def chat():
     user_message = request.json.get("message", "")
@@ -699,7 +746,7 @@ def download_sketch(field_id):
 
     server_url = request.url_root.rstrip('/')
     token = field.sensor_token
-    firebase_host = "https://ifest2026-default-rtdb.europe-west1.firebasedatabase.app"  # change if needed
+    firebase_host = "https://test2708-2375b-default-rtdb.firebaseio.com"  # Replace with your own
 
     sketch_template = """
 /*
