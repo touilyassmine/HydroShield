@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import secrets
+import requests  # <-- ADDED
 from datetime import datetime, timezone
 
 from dotenv import load_dotenv
@@ -28,7 +29,6 @@ app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 
 db = SQLAlchemy(app)
 
-# ---------- Constants ----------
 SOIL_TYPES = {
     "sandy":  "Sandy — drains fast, dries out quickly",
     "clay":   "Clay / muddy — holds water, drains slowly",
@@ -146,7 +146,6 @@ def login_required_redirect():
 def call_vision_json(prompt_text, image_bytes, mime):
     if client is None:
         raise Exception("GROQ_API_KEY not configured")
-
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     try:
         print("📸 Calling Groq vision with model:", VISION_MODEL)
@@ -168,6 +167,24 @@ def call_vision_json(prompt_text, image_bytes, mime):
         if hasattr(e, 'response'):
             print("Response body:", e.response.text if hasattr(e.response, 'text') else "No body")
         raise
+
+# ---------- Firebase fetch function ----------
+FIREBASE_HOST = "https://test2708-2375b-default-rtdb.firebaseio.com"  # <-- YOUR FIREBASE URL
+
+def fetch_firebase_data(device_id):
+    """Fetch latest sensor data from Firebase for a given device_id."""
+    if not device_id:
+        return None
+    url = f"{FIREBASE_HOST}/devices/{device_id}.json"
+    try:
+        resp = requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data:
+                return data
+    except Exception as e:
+        print(f"[Firebase fetch] Error: {e}")
+    return None
 
 # ---------- Database Models ----------
 class User(db.Model):
@@ -226,7 +243,8 @@ class Field(db.Model):
     last_seen = db.Column(db.DateTime, nullable=True)
 
     sensor_token = db.Column(db.String(64), unique=True, default=lambda: secrets.token_hex(16))
-    device_id = db.Column(db.String(64), unique=True, nullable=True)
+    device_id = db.Column(db.String(64), unique=True, nullable=True)  # <-- NEW
+
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
@@ -259,7 +277,6 @@ class Field(db.Model):
             "device_id": self.device_id,
         }
 
-# ---------- Create tables ----------
 with app.app_context():
     db.create_all()
 
@@ -391,6 +408,26 @@ def dashboard():
     if redirect_resp:
         return redirect_resp
     user = current_user()
+
+    # ---------- NEW: Fetch data from Firebase for each field ----------
+    for field in user.fields:
+        if field.device_id:
+            firebase_data = fetch_firebase_data(field.device_id)
+            if firebase_data:
+                updated = False
+                if 'soil_moisture' in firebase_data:
+                    field.last_moisture = firebase_data['soil_moisture']
+                    updated = True
+                if 'temperature' in firebase_data:
+                    field.last_temperature = firebase_data['temperature']
+                    updated = True
+                if 'rain' in firebase_data:
+                    field.last_rain = bool(firebase_data['rain'])
+                    updated = True
+                if updated:
+                    field.last_seen = datetime.now(timezone.utc)
+                    db.session.commit()
+
     return render_template("index.html", user=user, fields=user.fields, soils=SOIL_TYPES)
 
 # ---------- API routes ----------
@@ -635,48 +672,6 @@ def sensor_command(token):
         return jsonify({"error": "Unknown sensor token"}), 404
     return jsonify({"irrigate": field.irrigation_on})
 
-# ---------- NEW: device report route ----------
-@app.route("/api/device/data", methods=["POST"])
-def device_report():
-    data = request.get_json(force=True, silent=True)
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-
-    device_id = data.get("device_id")
-    if not device_id:
-        return jsonify({"error": "device_id missing"}), 400
-
-    field = Field.query.filter_by(device_id=device_id).first()
-    if not field:
-        return jsonify({"error": "Unknown device_id"}), 404
-
-    pins = data.get("pins", {})
-
-    # Extract soil moisture from A0 pin
-    moisture_pin = pins.get("A0")
-    if moisture_pin and "value" in moisture_pin:
-        field.last_moisture = moisture_pin["value"]
-
-    # Extract rain/water from D6 pin
-    rain_pin = pins.get("D6")
-    if rain_pin and "value" in rain_pin:
-        field.last_rain = bool(rain_pin["value"])
-
-    field.last_seen = datetime.now(timezone.utc)
-    db.session.commit()
-
-    # Auto irrigation decision
-    if field.auto_mode and field.last_moisture is not None:
-        if field.last_rain:
-            field.irrigation_on = False
-        elif field.last_moisture <= field.moisture_low:
-            field.irrigation_on = True
-        elif field.last_moisture >= field.moisture_high:
-            field.irrigation_on = False
-        db.session.commit()
-
-    return jsonify({"irrigate": field.irrigation_on})
-
 @app.route("/chat", methods=["POST"])
 def chat():
     user_message = request.json.get("message", "")
@@ -746,47 +741,53 @@ def download_sketch(field_id):
 
     server_url = request.url_root.rstrip('/')
     token = field.sensor_token
-    firebase_host = "https://test2708-2375b-default-rtdb.firebaseio.com"  # Replace with your own
+    firebase_host = "https://test2708-2375b-default-rtdb.firebaseio.com"  # <-- YOUR FIREBASE URL
 
     sketch_template = """
 /*
-  HydroShield — ESP8266 field controller (HydroShield + Firebase)
+  HydroShield — ESP8266 field controller (Firebase only)
   Generated for field: {{ field_name }}
   Sensor token: {{ token }}
-  Server: {{ server_url }}
   Firebase: {{ firebase_host }}
 */
 
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
 
+// Wi‑Fi credentials
 const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
-const char* SERVER_BASE_URL = "{{ server_url }}";
-const char* FIELD_TOKEN = "{{ token }}";
+// Firebase endpoint
 const char* FIREBASE_HOST = "{{ firebase_host }}";
 
-#define SOIL_MOISTURE_PIN A0
-#define RAIN_SENSOR_PIN   D5
-#define DHT_PIN           D4
-#define RELAY_PIN         D1
-#define DHT_TYPE DHT22
+// Device ID (generated automatically from chip ID)
+String getDeviceId() {
+  return "ESP_" + String(ESP.getChipId(), HEX);
+}
 
+// Pins (adjust to your wiring)
+#define SOIL_PIN A0
+#define RAIN_PIN D5
+#define DHT_PIN  D4
+#define RELAY_PIN D1
+#define DHT_TYPE DHT22
+DHT dht(DHT_PIN, DHT_TYPE);
+
+// Calibration values for soil moisture
 const int SOIL_DRY_RAW = 780;
 const int SOIL_WET_RAW = 320;
-const unsigned long REPORT_INTERVAL_MS = 30UL * 1000UL;
 
-DHT dht(DHT_PIN, DHT_TYPE);
+// Timing
+const unsigned long REPORT_INTERVAL_MS = 30UL * 1000UL;
 unsigned long lastReport = 0;
 
 void setup() {
   Serial.begin(115200);
-  pinMode(RAIN_SENSOR_PIN, INPUT);
+  pinMode(RAIN_PIN, INPUT);
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
   dht.begin();
@@ -797,10 +798,9 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWiFi();
   if (millis() - lastReport >= REPORT_INTERVAL_MS) {
     lastReport = millis();
-    float moisture = readSoilMoisturePercent();
+    float moisture = readSoilMoisture();
     float temperature = dht.readTemperature();
-    bool rain = readRainDetected();
-    reportToHydroShield(moisture, temperature, rain);
+    bool rain = (digitalRead(RAIN_PIN) == LOW);
     sendToFirebase(moisture, temperature, rain);
   }
 }
@@ -809,79 +809,48 @@ void connectWiFi() {
   Serial.printf("Connecting to Wi-Fi \"%s\"...\\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
-    delay(400);
+  int tries = 0;
+  while (WiFi.status() != WL_CONNECTED && tries < 20) {
+    delay(500);
     Serial.print(".");
+    tries++;
   }
-  Serial.println();
-  Serial.println(WiFi.status() == WL_CONNECTED ? "Wi-Fi connected." : "Wi-Fi connection failed, will retry.");
+  Serial.println(WiFi.status() == WL_CONNECTED ? " Connected!" : " Failed.");
 }
 
-float readSoilMoisturePercent() {
-  int raw = analogRead(SOIL_MOISTURE_PIN);
+float readSoilMoisture() {
+  int raw = analogRead(SOIL_PIN);
   raw = constrain(raw, SOIL_WET_RAW, SOIL_DRY_RAW);
-  float pct = 100.0 * (SOIL_DRY_RAW - raw) / (float)(SOIL_DRY_RAW - SOIL_WET_RAW);
+  float pct = 100.0 * (float)(SOIL_DRY_RAW - raw) / (float)(SOIL_DRY_RAW - SOIL_WET_RAW);
+  // Invert if your sensor gives opposite (uncomment next line)
+  // pct = 100.0 - pct;
   return round(pct * 10) / 10.0;
-}
-
-bool readRainDetected() {
-  return digitalRead(RAIN_SENSOR_PIN) == LOW;
-}
-
-void reportToHydroShield(float moisture, float temperature, bool rain) {
-  WiFiClient client;
-  HTTPClient http;
-  StaticJsonDocument<200> payload;
-  payload["moisture"] = moisture;
-  if (!isnan(temperature)) payload["temperature"] = temperature;
-  payload["rain"] = rain;
-  String body;
-  serializeJson(payload, body);
-  String url = String(SERVER_BASE_URL) + "/api/sensor/" + FIELD_TOKEN + "/report";
-  http.begin(client, url);
-  http.addHeader("Content-Type", "application/json");
-  int statusCode = http.POST(body);
-  if (statusCode == 200) {
-    StaticJsonDocument<100> response;
-    deserializeJson(response, http.getString());
-    bool irrigate = response["irrigate"] | false;
-    digitalWrite(RELAY_PIN, irrigate ? HIGH : LOW);
-    Serial.printf("HydroShield -> Moisture: %.1f%%  Temp: %.1fC  Rain: %s  -> Irrigate: %s\\n",
-                  moisture, temperature, rain ? "yes" : "no", irrigate ? "ON" : "OFF");
-  } else {
-    Serial.printf("HydroShield report failed, HTTP %d\\n", statusCode);
-  }
-  http.end();
 }
 
 void sendToFirebase(float moisture, float temperature, bool rain) {
   WiFiClientSecure secureClient;
   secureClient.setInsecure();
   HTTPClient http;
-  String path = "/sensors/" + String(FIELD_TOKEN) + ".json";
-  String url = String(FIREBASE_HOST) + path;
-  StaticJsonDocument<200> doc;
-  doc["moisture"] = moisture;
-  if (!isnan(temperature)) doc["temperature"] = temperature;
-  doc["rain"] = rain;
-  doc["timestamp"] = millis();
-  String body;
-  serializeJson(doc, body);
+  String url = String(FIREBASE_HOST) + "/devices/" + getDeviceId() + ".json";
+  String payload = "{";
+  payload += "\"soil_moisture\":" + String(moisture, 1) + ",";
+  payload += "\"temperature\":" + String(temperature, 1) + ",";
+  payload += "\"rain\":" + String(rain ? 1 : 0);
+  payload += "}";
   http.begin(secureClient, url);
   http.addHeader("Content-Type", "application/json");
-  int statusCode = http.PUT(body);
-  if (statusCode == 200) {
-    Serial.println("Firebase update OK");
+  int httpCode = http.PATCH(payload);
+  if (httpCode > 0) {
+    Serial.printf("Firebase update OK (HTTP %d)\\n", httpCode);
   } else {
-    Serial.printf("Firebase update failed, HTTP %d\\n", statusCode);
+    Serial.printf("Firebase error: %s\\n", http.errorToString(httpCode).c_str());
   }
   http.end();
 }
 """
 
     template = Template(sketch_template)
-    rendered = template.render(field_name=field.name, token=token, server_url=server_url, firebase_host=firebase_host)
+    rendered = template.render(field_name=field.name, token=token, firebase_host=firebase_host)
 
     response = make_response(rendered)
     response.headers["Content-Disposition"] = f"attachment; filename=hydroshield_{field.name.replace(' ', '_')}.ino"
