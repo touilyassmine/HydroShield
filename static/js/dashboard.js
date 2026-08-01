@@ -1,5 +1,6 @@
 (() => {
     const CIRCUMFERENCE = 163.36;
+    let refreshInterval = null;
 
     function applyFieldState(card, f) {
         const pill = card.querySelector('[data-role="status-pill"]');
@@ -16,13 +17,33 @@
 
         card.querySelector('[data-role="moisture-val"]').textContent =
             f.last_moisture != null ? `${f.last_moisture}%` : "—";
-        card.querySelector('[data-role="temp-val"]').textContent =
-            f.last_temperature != null ? `${f.last_temperature}°C` : "—";
         card.querySelector('[data-role="rain-val"]').textContent = f.last_rain ? "Detected" : "None";
 
         card.querySelector('[data-role="auto-checkbox"]').checked = !!f.auto_mode;
     }
 
+    // ---------- FETCH LATEST DATA FOR A SINGLE FIELD ----------
+    async function refreshField(card) {
+        const fieldId = card.dataset.fieldId;
+        try {
+            const res = await fetch(`/api/fields/${fieldId}`);
+            if (!res.ok) return;
+            const field = await res.json();
+            applyFieldState(card, field);
+        } catch (e) {
+            // silent fail – keep old data
+        }
+    }
+
+    // ---------- REFRESH ALL FIELDS ----------
+    async function refreshAllFields() {
+        const cards = document.querySelectorAll(".field-card");
+        for (const card of cards) {
+            await refreshField(card);
+        }
+    }
+
+    // ---------- SETUP EVENT LISTENERS ----------
     document.querySelectorAll(".field-card").forEach(card => {
         const fieldId = card.dataset.fieldId;
 
@@ -52,21 +73,21 @@
         });
     });
 
-    // Poll each field's latest sensor snapshot every 12s so cards stay live
-    // once the ESP8266 boards start reporting.
-    async function refreshAll() {
-        const cards = document.querySelectorAll(".field-card");
-        for (const card of cards) {
-            const fieldId = card.dataset.fieldId;
-            try {
-                const res = await fetch(`/api/fields/${fieldId}`);
-                if (!res.ok) continue;
-                const field = await res.json();
-                applyFieldState(card, field);
-            } catch { /* skip a beat, try again next cycle */ }
-        }
-    }
+    // ---------- START AUTO-REFRESH ----------
     if (document.querySelector(".field-card")) {
-        setInterval(refreshAll, 12000);
+        // Initial refresh
+        refreshAllFields();
+
+        // Refresh every 5 seconds (5000 ms)
+        refreshInterval = setInterval(refreshAllFields, 5000);
+
+        // Optional: stop refreshing when the page is hidden (saves resources)
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) {
+                clearInterval(refreshInterval);
+            } else {
+                refreshInterval = setInterval(refreshAllFields, 5000);
+            }
+        });
     }
 })();
