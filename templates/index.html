@@ -29,6 +29,11 @@
                     <div class="titles">
                         <h3>{{ f.name }}</h3>
                         <div class="crop-label">{{ f.crop_label }}{% if f.crop_origin %} · {{ f.crop_origin }}{% endif %}{% if f.area_hectares %} · {{ f.area_hectares }} ha{% endif %}</div>
+                        {% if f.device_id %}
+                        <div style="font-size: 10px; color: var(--muted); margin-top: 2px;">
+                            Device ID: <code style="background: var(--bg-soft); padding: 1px 4px; border-radius: 3px;">{{ f.device_id }}</code>
+                        </div>
+                        {% endif %}
                     </div>
                     <span class="status-pill {{ 'on' if f.irrigation_on else 'off' }}" data-role="status-pill">
                         <i></i>{{ 'Irrigating' if f.irrigation_on else 'Idle' }}
@@ -47,10 +52,11 @@
                     </div>
                 </div>
 
+                <!-- 🔥 Sensor row – TEMPERATURE REMOVED -->
                 <div class="sensor-row">
                     <div class="sensor-stat">
-                        <div class="lbl">Temperature</div>
-                        <div class="val" data-role="temp-val">{{ (f.last_temperature ~ "°C") if f.last_temperature is not none else "—" }}</div>
+                        <div class="lbl">Soil Moisture</div>
+                        <div class="val" data-role="moisture-val">{{ f.last_moisture if f.last_moisture is not none else "—" }}{% if f.last_moisture is not none %}%{% endif %}</div>
                     </div>
                     <div class="sensor-stat">
                         <div class="lbl">Rain</div>
@@ -126,7 +132,6 @@
     <div class="chat-messages" id="chat-messages"></div>
     <form class="chat-composer" id="chat-form">
         <input id="chat-input" placeholder="Ask about a field, watering, or upload a photo…" autocomplete="off">
-        <!-- 📷 ATTACH BUTTON -->
         <button type="button" class="chat-attach-btn" id="chat-attach-btn" title="Attach a plant photo">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
