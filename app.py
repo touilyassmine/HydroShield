@@ -640,7 +640,7 @@ def sensor_command(token):
 def ping():
     return "pong"
 
-@app.route("/api/device/report", methods=["POST"])
+@app.route("/api/device/data", methods=["POST"])
 def device_report():
     print("✅ /api/device/report was called!")
     data = request.get_json(force=True, silent=True)
