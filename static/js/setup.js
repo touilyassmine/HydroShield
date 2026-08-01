@@ -194,6 +194,9 @@
         if (healthStatus) formData.append("health_status", healthStatus);
         if (healthNote) formData.append("health_note", healthNote);
         formData.append("health_source", healthSource);
+        if (document.getElementById("device-id").value.trim()) {
+        formData.append("device_id", document.getElementById("device-id").value.trim());
+}
 
         try {
             const res = await fetch("/api/fields", { method: "POST", body: formData });
@@ -214,7 +217,7 @@
     function resetForm() {
         ageSource = "manual"; originSource = "manual"; soilSource = "manual";
         healthStatus = null; healthNote = null; healthSource = "manual";
-
+        document.getElementById("device-id").value = "";
         cropLabelInput.value = "";
         nameInput.value = "";
         areaInput.value = "";
